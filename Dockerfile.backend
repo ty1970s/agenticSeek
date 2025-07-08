@@ -1,5 +1,6 @@
 
-FROM --platform=linux/amd64 python:3.11-slim
+# Use available base image without platform specification
+FROM python:3.11-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install essential packages and Chrome dependencies

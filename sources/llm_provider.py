@@ -32,6 +32,7 @@ class Provider:
             "together": self.together_fn,
             "dsk_deepseek": self.dsk_deepseek,
             "openrouter": self.openrouter_fn,
+            "deepseek-private": self.deepseek_private_fn,
             "test": self.test_fn
         }
         self.logger = Logger("provider.log")
@@ -160,7 +161,14 @@ class Provider:
         Use local or remote Ollama server to generate text.
         """
         thought = ""
-        host = f"{self.internal_url}:11434" if self.is_local else f"http://{self.server_address}"
+        
+        # Check for custom OLLAMA_BASE_URL from environment
+        custom_base_url = os.getenv("OLLAMA_BASE_URL")
+        if custom_base_url:
+            host = custom_base_url
+        else:
+            host = f"{self.internal_url}:11434" if self.is_local else f"http://{self.server_address}"
+        
         client = OllamaClient(host=host)
 
         try:
@@ -447,6 +455,83 @@ class Provider:
         except APIError as e:
             raise APIError(f"API error occurred: {str(e)}") from e
         return None
+
+    def deepseek_private_fn(self, history, verbose=False):
+        """
+        Use private deployed DeepSeek server with OpenAI-compatible API to generate text.
+        This supports private/on-premise DeepSeek deployments.
+        """
+        # 优先使用环境变量中的BASE_URL，然后使用server_address
+        load_dotenv()
+        base_url_from_env = os.getenv("DEEPSEEK_PRIVATE_BASE_URL")
+        
+        if base_url_from_env:
+            base_url = base_url_from_env
+        else:
+            # 构建私有服务器的URL（保持向后兼容）
+            if self.in_docker:
+                # Docker环境中，使用内部URL
+                try:
+                    host, port = self.server_address.split(':')
+                except ValueError:
+                    port = "8000"  # 默认端口
+                base_url = f"{self.internal_url}:{port}"
+            else:
+                # 确保URL格式正确
+                if self.server_address.startswith(('http://', 'https://')):
+                    base_url = self.server_address
+                else:
+                    base_url = f"http://{self.server_address}"
+        
+        # 添加OpenAI兼容的API路径
+        if not base_url.endswith('/v1'):
+            if base_url.endswith('/'):
+                base_url += 'v1'
+            else:
+                base_url += '/v1'
+        
+        # 获取API密钥（可选，某些私有部署可能不需要）
+        api_key = self.get_api_key("deepseek_private") if hasattr(self, 'api_key') and self.api_key else "dummy-key"
+        
+        client = OpenAI(api_key=api_key, base_url=base_url)
+        
+        try:
+            # 检查服务器连接
+            server_address_for_check = base_url_from_env or self.server_address
+            server_host = server_address_for_check.split('/')[2] if '//' in server_address_for_check else server_address_for_check.split('/')[0]
+            
+            if not self.is_ip_online(server_host):
+                raise Exception(f"Private DeepSeek server is offline at {server_host}")
+            
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=history,
+                stream=False,
+                temperature=0.7,
+                max_tokens=4096
+            )
+            
+            if response is None:
+                raise Exception("Private DeepSeek server response is empty.")
+            
+            thought = response.choices[0].message.content
+            if verbose:
+                print(thought)
+            return thought
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "connection" in error_msg or "refused" in error_msg:
+                raise Exception(f"Cannot connect to private DeepSeek server at {base_url}. Please check if the server is running and accessible.")
+            elif "unauthorized" in error_msg or "401" in error_msg:
+                raise Exception(f"Authentication failed for private DeepSeek server. Please check your API key configuration.")
+            elif "404" in error_msg:
+                raise Exception(f"Private DeepSeek server API endpoint not found at {base_url}. Please verify the server configuration.")
+            elif "timeout" in error_msg:
+                raise Exception(f"Request to private DeepSeek server timed out. The server might be overloaded.")
+            else:
+                raise Exception(f"Private DeepSeek server error: {str(e)}") from e
+        return thought
 
     def test_fn(self, history, verbose=True):
         """

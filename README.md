@@ -133,6 +133,12 @@ See below for a list of local supported provider.
 
 Change the config.ini file to set the provider_name to a supported provider and provider_model to a LLM supported by your provider. We recommend reasoning model such as *Magistral* or *Deepseek*.
 
+> 🛠️ **Quick Provider Switch Tool**: For easy provider configuration, you can use our interactive script:
+> ```sh
+> ./switch_provider.sh
+> ```
+> This tool allows you to quickly switch between different providers with backup and restore functionality.
+
 See the **FAQ** at the end of the README for required hardware.
 
 ```sh
@@ -460,6 +466,8 @@ stealth_mode = False
 
 
 This section summarizes the supported LLM provider types. Configure them in `config.ini`.
+
+> 📋 **For a comprehensive guide on all available providers and their configuration, see [PROVIDER_CONFIGURATION_GUIDE.md](./PROVIDER_CONFIGURATION_GUIDE.md)**
 
 **Local Providers (Run on Your Own Hardware):**
 

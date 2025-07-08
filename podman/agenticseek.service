@@ -1,0 +1,22 @@
+[Unit]
+Description=AgenticSeek Container Stack
+After=podman.service
+Requires=podman.service
+Documentation=https://github.com/Fosowl/agenticSeek
+
+[Service]
+Type=forking
+ExecStartPre=-/usr/bin/podman network create agentic-seek-net
+ExecStart=/usr/bin/podman-compose -f /path/to/agenticSeek/podman-compose.yml --profile full up -d
+ExecStop=/usr/bin/podman-compose -f /path/to/agenticSeek/podman-compose.yml down
+ExecStopPost=-/usr/bin/podman network rm agentic-seek-net
+Restart=always
+RestartSec=10
+User=agenticseek
+Group=agenticseek
+WorkingDirectory=/path/to/agenticSeek
+Environment=PODMAN_USERNS=keep-id
+Environment=CONTAINER_RUNTIME=podman
+
+[Install]
+WantedBy=multi-user.target

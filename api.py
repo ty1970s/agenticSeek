@@ -27,20 +27,36 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def is_running_in_docker():
-    """Detect if code is running inside a Docker container."""
-    # Method 1: Check for .dockerenv file
+def is_running_in_container():
+    """Detect if code is running inside a container (Docker or Podman)."""
+    # Method 1: Check for .dockerenv file (Docker)
     if os.path.exists('/.dockerenv'):
         return True
     
-    # Method 2: Check cgroup
+    # Method 2: Check for container environment (Podman)
+    if os.path.exists('/run/.containerenv'):
+        return True
+    
+    # Method 3: Check cgroup for container indicators
     try:
         with open('/proc/1/cgroup', 'r') as f:
-            return 'docker' in f.read()
+            content = f.read()
+            if any(indicator in content for indicator in ['docker', 'containers', 'podman']):
+                return True
     except:
         pass
     
+    # Method 4: Check environment variables
+    container_env_vars = ['CONTAINER', 'container', 'CONTAINER_RUNTIME']
+    for var in container_env_vars:
+        if os.getenv(var):
+            return True
+    
     return False
+
+def is_running_in_docker():
+    """Detect if code is running inside a Docker container (legacy compatibility)."""
+    return is_running_in_container()
 
 
 from celery import Celery
@@ -69,12 +85,12 @@ def initialize_system():
     personality_folder = "jarvis" if config.getboolean('MAIN', 'jarvis_personality') else "base"
     languages = config["MAIN"]["languages"].split(' ')
     
-    # Force headless mode in Docker containers
+    # Force headless mode in containers
     headless = config.getboolean('BROWSER', 'headless_browser')
-    if is_running_in_docker() and not headless:
-        # Print prominent warning to console (visible in docker-compose output)
+    if is_running_in_container() and not headless:
+        # Print prominent warning to console (visible in container output)
         print("\n" + "*" * 70)
-        print("*** WARNING: Detected Docker environment - forcing headless_browser=True ***")
+        print("*** WARNING: Detected container environment - forcing headless_browser=True ***")
         print("*** INFO: To see the browser, run 'python cli.py' on your host machine ***")
         print("*" * 70 + "\n")
         
@@ -82,7 +98,7 @@ def initialize_system():
         sys.stdout.flush()
         
         # Also log to file
-        logger.warning("Detected Docker environment - forcing headless_browser=True")
+        logger.warning("Detected container environment - forcing headless_browser=True")
         logger.info("To see the browser, run 'python cli.py' on your host machine instead")
         
         headless = True
@@ -286,8 +302,9 @@ async def process_query(request: QueryRequest):
 
 if __name__ == "__main__":
     # Print startup info
-    if is_running_in_docker():
-        print("[AgenticSeek] Starting in Docker container...")
+    if is_running_in_container():
+        container_runtime = os.getenv('CONTAINER_RUNTIME', 'unknown')
+        print(f"[AgenticSeek] Starting in container environment (runtime: {container_runtime})...")
     else:
         print("[AgenticSeek] Starting on host machine...")
     
