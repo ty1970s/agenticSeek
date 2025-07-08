@@ -27,6 +27,48 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Function to get Podman socket path
+get_podman_socket() {
+    # Check if podman machine is running
+    if ! podman machine list --format "{{.Running}}" 2>/dev/null | grep -q "true"; then
+        print_warning "Podman machine is not running. Starting it..."
+        podman machine start
+        sleep 5
+    fi
+    
+    # Try to find the correct socket path
+    local socket_paths=(
+        "/run/user/$(id -u)/podman/podman.sock"
+        "$HOME/.local/share/containers/podman/machine/podman.sock"
+        "/var/folders/*/T/podman/podman-machine-default-api.sock"
+    )
+    
+    for socket_path in "${socket_paths[@]}"; do
+        # Handle wildcard expansion for /var/folders
+        if [[ "$socket_path" == *"*"* ]]; then
+            for expanded_path in $socket_path; do
+                if [ -S "$expanded_path" ]; then
+                    echo "$expanded_path"
+                    return 0
+                fi
+            done
+        elif [ -S "$socket_path" ]; then
+            echo "$socket_path"
+            return 0
+        fi
+    done
+    
+    # If no socket found, try to get it from podman system connection
+    local connection_socket=$(podman system connection list --format "{{.URI}}" 2>/dev/null | head -1 | sed 's/unix://')
+    if [ -S "$connection_socket" ]; then
+        echo "$connection_socket"
+        return 0
+    fi
+    
+    print_error "Could not find Podman socket"
+    return 1
+}
+
 # Load environment variables first
 if [ -f ".env" ]; then
     print_info "Loading environment variables from .env"
@@ -97,32 +139,13 @@ elif command_exists docker-compose; then
     # Use docker-compose with podman backend
     # Try to use Podman machine socket on macOS
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        # Check if Podman machine is running and get socket path
-        if podman machine list | grep -q "Currently running"; then
-            PODMAN_SOCKET=$(podman machine inspect podman-machine-default --format '{{.ConnectionInfo.PodmanSocket.Path}}' 2>/dev/null)
-            if [ -S "$PODMAN_SOCKET" ]; then
-                export DOCKER_HOST="unix://$PODMAN_SOCKET"
-                print_info "Using docker-compose with Podman backend via socket: $PODMAN_SOCKET"
-            else
-                print_warning "Podman socket not found at $PODMAN_SOCKET, trying alternative paths"
-                # Try common socket locations
-                for socket_path in "/tmp/podman-run-$(id -u)/podman/podman.sock" "/var/run/podman/podman.sock" "/run/podman/podman.sock"; do
-                    if [ -S "$socket_path" ]; then
-                        export DOCKER_HOST="unix://$socket_path"
-                        print_info "Found Podman socket at: $socket_path"
-                        break
-                    fi
-                done
-                
-                if [ -z "$DOCKER_HOST" ]; then
-                    print_error "Could not find accessible Podman socket"
-                    print_info "Available sockets:"
-                    find /tmp /var/run /run -name "*podman*.sock" 2>/dev/null || true
-                    exit 1
-                fi
-            fi
+        # Use docker-compose with Podman backend
+        PODMAN_SOCKET=$(get_podman_socket)
+        if [ $? -eq 0 ]; then
+            export DOCKER_HOST="unix://$PODMAN_SOCKET"
+            print_info "Using docker-compose with Podman socket: $PODMAN_SOCKET"
         else
-            print_error "Podman machine is not running"
+            print_error "Could not configure docker-compose with Podman"
             exit 1
         fi
     else
@@ -210,7 +233,7 @@ $COMPOSE_CMD -f "$COMPOSE_FILE" ps
 print_info "Services started successfully!"
 echo ""
 echo "Access URLs:"
-echo "  Frontend: http://localhost:3000"
+echo "  Frontend: http://localhost:3080"
 echo "  SearXNG: http://localhost:8081"
 if [ "$1" = "full" ]; then
     echo "  Backend API: http://localhost:7777"

@@ -26,6 +26,46 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Function to get Podman socket path
+get_podman_socket() {
+    # Check if podman machine is running
+    if ! podman machine list --format "{{.Running}}" 2>/dev/null | grep -q "true"; then
+        print_warning "Podman machine is not running"
+        return 1
+    fi
+    
+    # Try to find the correct socket path
+    local socket_paths=(
+        "/run/user/$(id -u)/podman/podman.sock"
+        "$HOME/.local/share/containers/podman/machine/podman.sock"
+        "/var/folders/*/T/podman/podman-machine-default-api.sock"
+    )
+    
+    for socket_path in "${socket_paths[@]}"; do
+        # Handle wildcard expansion for /var/folders
+        if [[ "$socket_path" == *"*"* ]]; then
+            for expanded_path in $socket_path; do
+                if [ -S "$expanded_path" ]; then
+                    echo "$expanded_path"
+                    return 0
+                fi
+            done
+        elif [ -S "$socket_path" ]; then
+            echo "$socket_path"
+            return 0
+        fi
+    done
+    
+    # If no socket found, try to get it from podman system connection
+    local connection_socket=$(podman system connection list --format "{{.URI}}" 2>/dev/null | head -1 | sed 's/unix://')
+    if [ -S "$connection_socket" ]; then
+        echo "$connection_socket"
+        return 0
+    fi
+    
+    return 1
+}
+
 # Check if URL is accessible
 check_url() {
     local url=$1
