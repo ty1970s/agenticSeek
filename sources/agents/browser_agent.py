@@ -1,5 +1,6 @@
 import re
 import time
+import logging
 from datetime import date
 from typing import List, Tuple, Type, Dict
 from enum import Enum
@@ -11,6 +12,9 @@ from sources.tools.searxSearch import searxSearch
 from sources.browser import Browser
 from sources.logger import Logger
 from sources.memory import Memory
+
+# Get logger for browser agent
+logger = logging.getLogger(__name__)
 
 class Action(Enum):
     REQUEST_EXIT = "REQUEST_EXIT"
@@ -339,29 +343,48 @@ class BrowserAgent(Agent):
         Returns:
             tuple containing the final answer and reasoning
         """
+        logger.info(f"[BrowserAgent] Processing user prompt: {user_prompt[:100]}...")
         complete = False
 
         animate_thinking(f"Thinking...", color="status")
+        logger.debug(f"[BrowserAgent] Creating search prompt and making LLM request...")
         mem_begin_idx = self.memory.push('user', self.search_prompt(user_prompt))
         ai_prompt, reasoning = await self.llm_request()
+        logger.info(f"[BrowserAgent] LLM search response received: {ai_prompt[:100]}...")
+        
         if Action.REQUEST_EXIT.value in ai_prompt:
+            logger.warning(f"[BrowserAgent] Web agent requested exit: {reasoning}")
             pretty_print(f"Web agent requested exit.\n{reasoning}\n\n{ai_prompt}", color="failure")
             return ai_prompt, "" 
+        
         animate_thinking(f"Searching...", color="status")
         self.status_message = "Searching..."
+        logger.info(f"[BrowserAgent] Executing web search...")
         search_result_raw = self.tools["web_search"].execute([ai_prompt], False)
         search_result = self.jsonify_search_results(search_result_raw)[:16]
+        logger.info(f"[BrowserAgent] Found {len(search_result)} search results")
         self.show_search_results(search_result)
+        
         prompt = self.make_newsearch_prompt(user_prompt, search_result)
         unvisited = [None]
+        iteration = 0
+        
         while not complete and len(unvisited) > 0 and not self.stop:
+            iteration += 1
+            logger.debug(f"[BrowserAgent] Navigation iteration {iteration}")
             self.memory.clear()
             unvisited = self.select_unvisited(search_result)
+            logger.debug(f"[BrowserAgent] Found {len(unvisited)} unvisited links")
+            
             answer, reasoning = await self.llm_decide(prompt, show_reasoning = False)
+            logger.debug(f"[BrowserAgent] LLM decision: {answer[:100]}...")
+            
             if self.stop:
+                logger.warning(f"[BrowserAgent] Stop requested")
                 pretty_print(f"Requested stop.", color="failure")
                 break
             if self.last_answer == answer:
+                logger.debug(f"[BrowserAgent] Stuck, creating stuck prompt")
                 prompt = self.stuck_prompt(user_prompt, unvisited)
                 continue
             self.last_answer = answer
@@ -369,9 +392,11 @@ class BrowserAgent(Agent):
 
             extracted_form = self.extract_form(answer)
             if len(extracted_form) > 0:
+                logger.info(f"[BrowserAgent] Filling web form with {len(extracted_form)} fields")
                 self.status_message = "Filling web form..."
                 pretty_print(f"Filling inputs form...", color="status")
                 fill_success = self.browser.fill_form(extracted_form)
+                logger.debug(f"[BrowserAgent] Form fill result: {fill_success}")
                 page_text = self.get_page_text(limit_to_model_ctx=True)
                 answer = self.handle_update_prompt(user_prompt, page_text, fill_success)
                 answer, reasoning = await self.llm_decide(prompt)

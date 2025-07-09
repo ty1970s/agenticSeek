@@ -2,6 +2,7 @@ import os
 import sys
 import torch
 import random
+import logging
 from typing import List, Tuple, Type, Dict
 
 from transformers import pipeline
@@ -15,6 +16,9 @@ from sources.agents.browser_agent import BrowserAgent
 from sources.language import LanguageUtility
 from sources.utility import pretty_print, animate_thinking, timer_decorator
 from sources.logger import Logger
+
+# Get logger for router
+logger = logging.getLogger(__name__)
 
 class AgentRouter:
     """
@@ -37,10 +41,29 @@ class AgentRouter:
         returns:
             Dict[str, Type[pipeline]]: The loaded pipelines
         """
-        animate_thinking("Loading zero-shot pipeline...", color="status")
-        return {
-            "bart": pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
-        }
+        import os
+        
+        # Check if we should use offline mode
+        offline_mode = os.getenv('TRANSFORMERS_OFFLINE', 'false').lower() == 'true'
+        
+        try:
+            animate_thinking("Loading zero-shot pipeline...", color="status")
+            
+            if offline_mode:
+                # Try to load from cache only
+                return {
+                    "bart": pipeline("zero-shot-classification", 
+                                   model="facebook/bart-large-mnli",
+                                   local_files_only=True)
+                }
+            else:
+                return {
+                    "bart": pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+                }
+        except Exception as e:
+            # Fallback: use a simpler classification method
+            pretty_print(f"Warning: Could not load BART model ({str(e)}). Using fallback classification.", color="warning")
+            return {}
 
     def load_llm_router(self) -> AdaptiveClassifier:
         """
@@ -378,6 +401,18 @@ class AgentRouter:
         """
         if len(text) <= 8:
             return "talk"
+            
+        # Check if BART model is available
+        if 'bart' not in self.pipelines or not self.pipelines['bart']:
+            # Fallback to LLM router only
+            result_llm_router = self.llm_router(text)
+            llm_router, confidence_llm_router = result_llm_router[0], result_llm_router[1]
+            self.logger.info(f"Routing (LLM only) for text {text}: {llm_router} ({confidence_llm_router})")
+            if log_confidence:
+                pretty_print(f"Agent choice (LLM only) -> {llm_router} ({confidence_llm_router})", color="warning")
+            return llm_router
+            
+        # Use both BART and LLM router
         result_bart = self.pipelines['bart'](text, labels)
         result_llm_router = self.llm_router(text)
         bart, confidence_bart = result_bart['labels'][0], result_bart['scores'][0]
@@ -446,26 +481,47 @@ class AgentRouter:
         Returns:
             Agent: The selected agent
         """
+        logger.info(f"[Router] Starting agent selection for query: {text[:100]}...")
         assert len(self.agents) > 0, "No agents available."
         if len(self.agents) == 1:
+            logger.info(f"[Router] Only one agent available, selecting: {self.agents[0].agent_name}")
             return self.agents[0]
+        
+        # Language detection and translation
         lang = self.lang_analysis.detect_language(text)
+        logger.debug(f"[Router] Detected language: {lang}")
         text = self.find_first_sentence(text)
-        text = self.lang_analysis.translate(text, lang)
+        translated_text = self.lang_analysis.translate(text, lang)
+        logger.debug(f"[Router] Translated text: {translated_text}")
+        
         labels = [agent.role for agent in self.agents]
-        complexity = self.estimate_complexity(text)
+        logger.debug(f"[Router] Available agent roles: {labels}")
+        
+        # Complexity estimation
+        complexity = self.estimate_complexity(translated_text)
+        logger.info(f"[Router] Estimated complexity: {complexity}")
         if complexity == "HIGH":
+            logger.info(f"[Router] Complex task detected, routing to planner agent.")
             pretty_print(f"Complex task detected, routing to planner agent.", color="info")
-            return self.find_planner_agent()
+            planner = self.find_planner_agent()
+            logger.info(f"[Router] Selected planner agent: {planner.agent_name if planner else 'None'}")
+            return planner
+        
         try:
-            best_agent = self.router_vote(text, labels, log_confidence=False)
+            best_agent = self.router_vote(translated_text, labels, log_confidence=False)
+            logger.info(f"[Router] Router vote result: {best_agent}")
         except Exception as e:
+            logger.error(f"[Router] Error in router vote: {str(e)}")
             raise e
+        
         for agent in self.agents:
             if best_agent == agent.role:
                 role_name = agent.role
+                logger.info(f"[Router] Successfully selected agent: {agent.agent_name} (role: {role_name})")
                 pretty_print(f"Selected agent: {agent.agent_name} (roles: {role_name})", color="warning")
                 return agent
+        
+        logger.error(f"[Router] No matching agent found for role: {best_agent}")
         pretty_print(f"Error choosing agent.", color="failure")
         self.logger.error("No agent selected.")
         return None

@@ -1,5 +1,6 @@
 import platform, os
 import asyncio
+import logging
 
 from sources.utility import pretty_print, animate_thinking
 from sources.agents.agent import Agent, executorResult
@@ -11,6 +12,9 @@ from sources.tools.JavaInterpreter import JavaInterpreter
 from sources.tools.fileFinder import FileFinder
 from sources.logger import Logger
 from sources.memory import Memory
+
+# Get logger for code agent
+logger = logging.getLogger(__name__)
 
 class CoderAgent(Agent):
     """
@@ -44,38 +48,54 @@ class CoderAgent(Agent):
         return f"{prompt}\n\n{info}"
 
     async def process(self, prompt, speech_module) -> str:
+        logger.info(f"[CodeAgent] Processing prompt: {prompt[:100]}...")
         answer = ""
         attempt = 0
         max_attempts = 5
         prompt = self.add_sys_info_prompt(prompt)
+        logger.debug(f"[CodeAgent] Added system info to prompt")
         self.memory.push('user', prompt)
         clarify_trigger = "REQUEST_CLARIFICATION"
 
         while attempt < max_attempts and not self.stop:
+            logger.debug(f"[CodeAgent] Attempt {attempt + 1}/{max_attempts}")
             print("Stopped?", self.stop)
             animate_thinking("Thinking...", color="status")
             await self.wait_message(speech_module)
+            
+            logger.debug(f"[CodeAgent] Making LLM request...")
             answer, reasoning = await self.llm_request()
             self.last_reasoning = reasoning
+            logger.info(f"[CodeAgent] LLM response received. Answer length: {len(answer) if answer else 0}")
+            
             if clarify_trigger in answer:
+                logger.info(f"[CodeAgent] Clarification requested, returning early")
                 self.last_answer = answer
                 await asyncio.sleep(0)
                 return answer, reasoning
             if not "```" in answer:
+                logger.info(f"[CodeAgent] No code blocks found, processing complete")
                 self.last_answer = answer
                 await asyncio.sleep(0)
                 break
+            
             self.show_answer()
             animate_thinking("Executing code...", color="status")
             self.status_message = "Executing code..."
+            logger.info(f"[CodeAgent] Executing code blocks...")
             self.logger.info(f"Attempt {attempt + 1}:\n{answer}")
             exec_success, feedback = self.execute_modules(answer)
             self.logger.info(f"Execution result: {exec_success}")
+            logger.info(f"[CodeAgent] Code execution result: {exec_success}")
+            logger.debug(f"[CodeAgent] Execution feedback: {feedback[:200] if feedback else 'None'}...")
+            
             answer = self.remove_blocks(answer)
             self.last_answer = answer
             await asyncio.sleep(0)
             if exec_success and self.get_last_tool_type() != "bash":
+                logger.info(f"[CodeAgent] Code execution successful, breaking loop")
                 break
+            logger.warning(f"[CodeAgent] Code execution failed, will retry")
             pretty_print(f"Execution failure:\n{feedback}", color="failure")
             pretty_print("Correcting code...", color="status")
             self.status_message = "Correcting code..."

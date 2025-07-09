@@ -6,6 +6,7 @@ import aiofiles
 import configparser
 import asyncio
 import time
+import logging
 from typing import List
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -13,6 +14,25 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uuid
+
+# Configure detailed logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('agenticseek.log')
+    ]
+)
+
+# Set specific logger levels for detailed agent monitoring
+logging.getLogger('sources.agents').setLevel(logging.DEBUG)
+logging.getLogger('sources.llm_provider').setLevel(logging.DEBUG)
+logging.getLogger('sources.interaction').setLevel(logging.DEBUG)
+logging.getLogger('sources.browser').setLevel(logging.DEBUG)
+logging.getLogger('uvicorn').setLevel(logging.INFO)
+
+logger = logging.getLogger(__name__)
 
 from sources.llm_provider import Provider
 from sources.interaction import Interaction
@@ -111,11 +131,15 @@ def initialize_system():
     )
     logger.info(f"Provider initialized: {provider.provider_name} ({provider.model})")
 
+    # Get default search URL from config
+    default_search_url = config.get('BROWSER', 'default_search_url', fallback='https://www.google.com')
+    
     browser = Browser(
         create_driver(headless=headless, stealth_mode=stealth_mode, lang=languages[0]),
-        anticaptcha_manual_install=stealth_mode
+        anticaptcha_manual_install=stealth_mode,
+        default_url=default_search_url
     )
-    logger.info("Browser initialized")
+    logger.info(f"Browser initialized with default URL: {default_search_url}")
 
     agents = [
         CasualAgent(
@@ -294,8 +318,20 @@ async def process_query(request: QueryRequest):
         return JSONResponse(status_code=200, content=query_resp.jsonify())
     except Exception as e:
         logger.error(f"An error occurred: {str(e)}")
-        sys.exit(1)
+        # Return error response instead of exiting the server
+        error_response = QueryResponse(
+            done="true",
+            answer=f"An error occurred while processing your query: {str(e)}",
+            reasoning=f"Error during query processing: {str(e)}",
+            agent_name="Error Handler",
+            success="false",
+            blocks={},
+            status="Error",
+            uid=str(uuid.uuid4())
+        )
+        return JSONResponse(status_code=500, content=error_response.jsonify())
     finally:
+        is_generating = False  # Always reset the flag
         logger.info("Processing finished")
         if config.getboolean('MAIN', 'save_session'):
             interaction.save_session()
@@ -313,4 +349,4 @@ if __name__ == "__main__":
         port = int(envport)
     else:
         port = 7777
-    uvicorn.run(api, host="0.0.0.0", port=7777)
+    uvicorn.run(api, host="0.0.0.0", port=port, log_level="debug", access_log=True)

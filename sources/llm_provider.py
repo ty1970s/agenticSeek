@@ -3,6 +3,7 @@ import platform
 import socket
 import subprocess
 import time
+import logging
 from urllib.parse import urlparse
 
 import httpx
@@ -13,6 +14,9 @@ from openai import OpenAI
 
 from sources.logger import Logger
 from sources.utility import pretty_print, animate_thinking
+
+# Get logger for llm provider
+logger = logging.getLogger(__name__)
 
 class Provider:
     def __init__(self, provider_name, model, server_address="127.0.0.1:5000", is_local=False):

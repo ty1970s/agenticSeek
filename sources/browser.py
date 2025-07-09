@@ -4,7 +4,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.common.exceptions import TimeoutException, WebDriverException, ElementClickInterceptedException
 from selenium.webdriver.common.action_chains import ActionChains
 from typing import List, Tuple, Type, Dict
 from bs4 import BeautifulSoup
@@ -105,19 +105,28 @@ def bypass_ssl() -> str:
 
 def create_undetected_chromedriver(service, chrome_options) -> webdriver.Chrome:
     """Create an undetected ChromeDriver instance."""
+    def safe_init_script(driver):
+        """Safely execute initialization script."""
+        try:
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        except Exception as e:
+            # Driver initialization script failed, but driver might still work
+            print(f"Warning: Failed to execute initialization script: {e}")
+    
     try:
         driver = uc.Chrome(service=service, options=chrome_options)
+        safe_init_script(driver)
+        return driver
     except Exception as e:
         pretty_print(f"Failed to create Chrome driver: {str(e)}. Trying to bypass SSL...", color="failure")
         try:
             bypass_ssl()
             driver = uc.Chrome(service=service, options=chrome_options)
-        except Exception as e:
-            pretty_print(f"Failed to create Chrome driver, fallback failed:\n{str(e)}.", color="failure")
-            raise e
-        raise e
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})") 
-    return driver
+            safe_init_script(driver)
+            return driver
+        except Exception as e2:
+            pretty_print(f"Failed to create Chrome driver, fallback failed:\n{str(e2)}.", color="failure")
+            raise e2
 
 def create_driver(headless=False, stealth_mode=True, crx_path="./crx/nopecha.crx", lang="en") -> webdriver.Chrome:
     """Create a Chrome WebDriver with specified options."""
@@ -133,37 +142,54 @@ def create_driver(headless=False, stealth_mode=True, crx_path="./crx/nopecha.crx
         raise FileNotFoundError("Google Chrome not found. Please install it.")
     chrome_options.binary_location = chrome_path
     
-    if headless:
-        #chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--disable-webgl")
-    user_data_dir = tempfile.mkdtemp()
     user_agent = get_random_user_agent()
     width, height = (1920, 1080)
-    user_data_dir = tempfile.mkdtemp(prefix="chrome_profile_")
+    
+    # Create a unique user data directory
+    profile_dir = tempfile.mkdtemp(prefix="chrome_profile_")
+    
+    # Basic Chrome options
     chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    profile_dir = f"/tmp/chrome_profile_{uuid.uuid4().hex[:8]}"
-    chrome_options.add_argument(f'--user-data-dir={profile_dir}')
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument(f"--user-data-dir={profile_dir}")
     chrome_options.add_argument(f"--accept-lang={lang}-{lang.upper()},{lang};q=0.9")
     chrome_options.add_argument("--disable-extensions")
     chrome_options.add_argument("--disable-background-timer-throttling")
     chrome_options.add_argument("--timezone=Europe/Paris")
-    chrome_options.add_argument('--remote-debugging-port=9222')
-    chrome_options.add_argument('--disable-background-timer-throttling')
-    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
-    chrome_options.add_argument('--disable-renderer-backgrounding')
-    chrome_options.add_argument('--disable-features=TranslateUI')
-    chrome_options.add_argument('--disable-ipc-flooding-protection')
+    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    chrome_options.add_argument("--disable-renderer-backgrounding")
+    chrome_options.add_argument("--disable-features=TranslateUI")
+    chrome_options.add_argument("--disable-ipc-flooding-protection")
     chrome_options.add_argument("--mute-audio")
     chrome_options.add_argument("--disable-notifications")
     chrome_options.add_argument("--autoplay-policy=user-gesture-required")
-    chrome_options.add_argument("--disable-features=SitePerProcess,IsolateOrigins")
-    chrome_options.add_argument("--enable-features=NetworkService,NetworkServiceInProcess")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_argument(f'user-agent={user_agent["ua"]}')
-    chrome_options.add_argument(f'--window-size={width},{height}')
+    chrome_options.add_argument(f"--user-agent={user_agent['ua']}")
+    chrome_options.add_argument(f"--window-size={width},{height}")
+    
+    # Headless mode configuration
+    if headless:
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--disable-webgl")
+        chrome_options.add_argument("--virtual-time-budget=5000")
+    
+    # Additional stability options for macOS
+    chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+    chrome_options.add_argument("--disable-software-rasterizer")
+    chrome_options.add_argument("--enable-logging")
+    chrome_options.add_argument("--log-level=0")
+    chrome_options.add_argument("--disable-web-security")
+    chrome_options.add_argument("--allow-running-insecure-content")
+    
+    # Use a random port for debugging to avoid conflicts
+    import random
+    debug_port = random.randint(9000, 9999)
+    chrome_options.add_argument(f"--remote-debugging-port={debug_port}")
+    
+    # Add timeout settings
+    chrome_options.add_argument("--timeout=30000")
+    chrome_options.add_argument("--page-load-strategy=normal")
     if not stealth_mode:
         if not os.path.exists(crx_path):
             pretty_print(f"Anti-captcha CRX not found at {crx_path}.", color="failure")
@@ -212,12 +238,13 @@ def create_driver(headless=False, stealth_mode=True, crx_path="./crx/nopecha.crx
     return webdriver.Chrome(service=service, options=chrome_options)
 
 class Browser:
-    def __init__(self, driver, anticaptcha_manual_install=False):
+    def __init__(self, driver, anticaptcha_manual_install=False, default_url="https://www.google.com"):
         """Initialize the browser with optional AntiCaptcha installation."""
         self.js_scripts_folder = "./sources/web_scripts/" if not __name__ == "__main__" else "./web_scripts/"
         self.anticaptcha = "https://chrome.google.com/webstore/detail/nopecha-captcha-solver/dknlfmjaanfblgfdfebhijalfmhmjjjo/related"
         self.logger = Logger("browser.log")
         self.screenshot_folder = os.path.join(os.getcwd(), ".screenshots")
+        self.default_url = default_url
         self.tabs = []
         try:
             self.driver = driver
@@ -230,17 +257,35 @@ class Browser:
             self.load_anticatpcha_manually()
     
     def setup_tabs(self):
-        self.tabs = self.driver.window_handles
         try:
-            self.driver.get("https://www.google.com")
+            self.tabs = self.driver.window_handles
         except Exception as e:
-            self.logger.log(f"Failed to setup initial tab:" + str(e))
+            self.logger.warning(f"Failed to get window handles: {str(e)}")
+            self.tabs = []
+        
+        try:
+            self.driver.get(self.default_url)
+            self.logger.log(f"Browser initialized with default URL: {self.default_url}")
+        except Exception as e:
+            self.logger.log(f"Failed to setup initial tab with URL {self.default_url}: " + str(e))
             pass
-        self.screenshot()
+        
+        # Only take screenshot if browser is still available
+        if self._is_browser_available():
+            self.screenshot()
+        else:
+            self.logger.warning("Browser window not available for initial screenshot")
     
     def switch_control_tab(self):
-        self.logger.log("Switching to control tab.")
-        self.driver.switch_to.window(self.tabs[0])
+        if not self._is_browser_available():
+            self.logger.warning("Browser window not available for switching tabs")
+            return
+        
+        try:
+            self.logger.log("Switching to control tab.")
+            self.driver.switch_to.window(self.tabs[0])
+        except Exception as e:
+            self.logger.warning(f"Failed to switch to control tab: {str(e)}")
             
     def load_anticatpcha_manually(self):
         pretty_print("You might want to install the AntiCaptcha extension for captchas.", color="warning")
@@ -261,15 +306,15 @@ class Browser:
     def human_scroll(self):
         for _ in range(random.randint(1, 3)):
             scroll_pixels = random.randint(150, 1200)
-            self.driver.execute_script(f"window.scrollBy(0, {scroll_pixels});")
+            self.safe_execute_script(f"window.scrollBy(0, {scroll_pixels});")
             time.sleep(random.uniform(0.5, 2.0))
             if random.random() < 0.4:
-                self.driver.execute_script(f"window.scrollBy(0, -{random.randint(50, 300)});")
+                self.safe_execute_script(f"window.scrollBy(0, -{random.randint(50, 300)});")
                 time.sleep(random.uniform(0.3, 1.0))
 
     def patch_browser_fingerprint(self) -> None:
         script = self.load_js("spoofing.js")
-        self.driver.execute_script(script)
+        self.safe_execute_script(script)
     
     def go_to(self, url:str) -> bool:
         """Navigate to a specified URL."""
@@ -317,6 +362,10 @@ class Browser:
 
     def get_text(self) -> str | None:
         """Get page text as formatted Markdown"""
+        if not self._is_browser_available():
+            self.logger.warning("Browser window not available for getting text")
+            return None
+        
         try:
             soup = BeautifulSoup(self.driver.page_source, 'html.parser')
             for element in soup(['script', 'style', 'noscript', 'meta', 'link']):
@@ -382,6 +431,10 @@ class Browser:
 
     def get_navigable(self) -> List[str]:
         """Get all navigable links on the current page."""
+        if not self._is_browser_available():
+            self.logger.warning("Browser window not available for getting navigable links")
+            return []
+        
         try:
             links = []
             elements = self.driver.find_elements(By.TAG_NAME, "a")
@@ -411,7 +464,7 @@ class Browser:
                 return False
             try:
                 self.logger.error(f"Scrolling to element for click_element.")
-                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", element)
+                self.safe_execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", element)
                 time.sleep(0.1)
                 element.click()
                 self.logger.info(f"Clicked element at {xpath}")
@@ -440,6 +493,10 @@ class Browser:
 
     def find_all_inputs(self, timeout=3):
         """Find all inputs elements on the page."""
+        if not self._is_browser_available():
+            self.logger.warning("Browser window not available for finding inputs")
+            return []
+        
         try:
             WebDriverWait(self.driver, timeout).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
@@ -449,7 +506,9 @@ class Browser:
             return []
         time.sleep(0.5)
         script = self.load_js("find_inputs.js")
-        input_elements = self.driver.execute_script(script)
+        input_elements = self.safe_execute_script(script)
+        if input_elements is None:
+            return []
         return input_elements
 
     def get_form_inputs(self) -> List[str]:
@@ -483,17 +542,25 @@ class Browser:
         """
         Find buttons and return their type and xpath.
         """
-        buttons = self.driver.find_elements(By.TAG_NAME, "button") + \
-                  self.driver.find_elements(By.XPATH, "//input[@type='submit']")
-        result = []
-        for i, button in enumerate(buttons):
-            if not button.is_displayed() or not button.is_enabled():
-                continue
-            text = (button.text or button.get_attribute("value") or "").lower().replace(' ', '')
-            xpath = f"(//button | //input[@type='submit'])[{i + 1}]"
-            result.append((text, xpath))
-        result.sort(key=lambda x: len(x[0]))
-        return result
+        if not self._is_browser_available():
+            self.logger.warning("Browser window not available for getting buttons")
+            return []
+        
+        try:
+            buttons = self.driver.find_elements(By.TAG_NAME, "button") + \
+                      self.driver.find_elements(By.XPATH, "//input[@type='submit']")
+            result = []
+            for i, button in enumerate(buttons):
+                if not button.is_displayed() or not button.is_enabled():
+                    continue
+                text = (button.text or button.get_attribute("value") or "").lower().replace(' ', '')
+                xpath = f"(//button | //input[@type='submit'])[{i + 1}]"
+                result.append((text, xpath))
+            result.sort(key=lambda x: len(x[0]))
+            return result
+        except Exception as e:
+            self.logger.error(f"Error getting buttons: {str(e)}")
+            return []
 
     def wait_for_submission_outcome(self, timeout: int = 10) -> bool:
         """
@@ -547,6 +614,10 @@ class Browser:
         Find and tick all checkboxes on the page.
         Returns True if successful, False if any issues occur.
         """
+        if not self._is_browser_available():
+            self.logger.warning("Browser window not available for ticking checkboxes")
+            return False
+        
         try:
             checkboxes = self.driver.find_elements(By.XPATH, "//input[@type='checkbox']")
             if not checkboxes:
@@ -558,7 +629,7 @@ class Browser:
                     WebDriverWait(self.driver, 10).until(
                         EC.element_to_be_clickable(checkbox)
                     )
-                    self.driver.execute_script(
+                    self.safe_execute_script(
                         "arguments[0].scrollIntoView({block: 'center', inline: 'center'});", checkbox
                     )
                     if not checkbox.is_selected():
@@ -566,7 +637,7 @@ class Browser:
                             checkbox.click()
                             self.logger.info(f"Ticked checkbox {index}")
                         except ElementClickInterceptedException:
-                            self.driver.execute_script("arguments[0].click();", checkbox)
+                            self.safe_execute_script("arguments[0].click();", checkbox)
                             self.logger.warning(f"Click checkbox {index} intercepted")
                     else:
                         self.logger.info(f"Checkbox {index} already ticked")
@@ -625,7 +696,7 @@ class Browser:
                 except TimeoutException:
                     self.logger.error(f"Timeout waiting for element '{name}' to be clickable")
                     continue
-                self.driver.execute_script("arguments[0].scrollIntoView(true);", element)
+                self.safe_execute_script("arguments[0].scrollIntoView(true);", element)
                 if not element.is_displayed() or not element.is_enabled():
                     self.logger.warning(f"Element '{name}' is not interactable (not displayed or disabled)")
                     continue
@@ -667,17 +738,31 @@ class Browser:
 
     def get_current_url(self) -> str:
         """Get the current URL of the page."""
-        return self.driver.current_url
+        if not self._is_browser_available():
+            self.logger.warning("Browser window not available for getting current URL")
+            return ""
+        try:
+            return self.driver.current_url
+        except Exception as e:
+            self.logger.warning(f"Error getting current URL: {str(e)}")
+            return ""
 
     def get_page_title(self) -> str:
         """Get the title of the current page."""
-        return self.driver.title
+        if not self._is_browser_available():
+            self.logger.warning("Browser window not available for getting page title")
+            return ""
+        try:
+            return self.driver.title
+        except Exception as e:
+            self.logger.warning(f"Error getting page title: {str(e)}")
+            return ""
 
     def scroll_bottom(self) -> bool:
         """Scroll to the bottom of the page."""
         try:
             self.logger.info("Scrolling to the bottom of the page...")
-            self.driver.execute_script(
+            self.safe_execute_script(
                 "window.scrollTo(0, document.body.scrollHeight);"
             )
             time.sleep(0.5)
@@ -693,9 +778,15 @@ class Browser:
         """Take a screenshot of the current page, attempt to capture the full page by zooming out."""
         self.logger.info("Taking full page screenshot...")
         time.sleep(0.1)
+        original_zoom = None
         try:
-            original_zoom = self.driver.execute_script("return document.body.style.zoom || 1;")
-            self.driver.execute_script("document.body.style.zoom='75%'")
+            # Check if driver and window are still available
+            if not self._is_browser_available():
+                self.logger.warning("Browser window not available for screenshot")
+                return False
+                
+            original_zoom = self.safe_execute_script("return document.body.style.zoom || 1;")
+            self.safe_execute_script("document.body.style.zoom='75%'")
             time.sleep(0.1)
             path = os.path.join(self.screenshot_folder, filename)
             if not os.path.exists(self.screenshot_folder):
@@ -706,7 +797,12 @@ class Browser:
             self.logger.error(f"Error taking full page screenshot: {str(e)}")
             return False
         finally:
-            self.driver.execute_script(f"document.body.style.zoom='1'")
+            # Only restore zoom if browser is still available
+            if self._is_browser_available() and original_zoom is not None:
+                try:
+                    self.safe_execute_script(f"document.body.style.zoom='{original_zoom}'")
+                except Exception as e:
+                    self.logger.warning(f"Could not restore zoom level: {str(e)}")
         return True
 
     def apply_web_safety(self):
@@ -715,8 +811,37 @@ class Browser:
         """
         self.logger.info("Applying web safety measures...")
         script = self.load_js("inject_safety_script.js")
-        input_elements = self.driver.execute_script(script)
+        input_elements = self.safe_execute_script(script)
 
+    def _is_browser_available(self) -> bool:
+        """Check if the browser window is still available for operations."""
+        try:
+            # Try to get current URL - this will fail if window is closed
+            _ = self.driver.current_url
+            return True
+        except Exception:
+            return False
+    
+    def safe_execute_script(self, script, *args):
+        """Safely execute JavaScript, checking if browser is available first."""
+        if not self._is_browser_available():
+            self.logger.warning("Browser window not available for script execution")
+            return None
+        try:
+            return self.driver.execute_script(script, *args)
+        except Exception as e:
+            self.logger.warning(f"Error executing script: {str(e)}")
+            return None
+    
+    def quit(self):
+        """Safely quit the browser driver."""
+        try:
+            if hasattr(self, 'driver') and self.driver:
+                self.driver.quit()
+                self.logger.info("Browser driver closed successfully")
+        except Exception as e:
+            self.logger.warning(f"Error closing browser driver: {str(e)}")
+    
 if __name__ == "__main__":
     driver = create_driver(headless=False, stealth_mode=True, crx_path="../crx/nopecha.crx")
     browser = Browser(driver, anticaptcha_manual_install=True)

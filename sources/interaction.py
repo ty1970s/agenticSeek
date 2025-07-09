@@ -1,4 +1,5 @@
 import readline
+import logging
 from typing import List, Tuple, Type, Dict
 
 from sources.text_to_speech import Speech
@@ -6,6 +7,9 @@ from sources.utility import pretty_print, animate_thinking
 from sources.router import AgentRouter
 from sources.speech_to_text import AudioTranscriber, AudioRecorder
 import threading
+
+# Get logger for interaction
+logger = logging.getLogger(__name__)
 
 
 class Interaction:
@@ -148,24 +152,47 @@ class Interaction:
     
     async def think(self) -> bool:
         """Request AI agents to process the user input."""
+        logger.info(f"[Interaction] Starting think process for query: {self.last_query[:100] if self.last_query else 'None'}...")
         push_last_agent_memory = False
         if self.last_query is None or len(self.last_query) == 0:
+            logger.warning("[Interaction] No query provided, returning False")
             return False
+        
+        # Agent selection
+        logger.debug("[Interaction] Selecting agent for query...")
         agent = self.router.select_agent(self.last_query)
         if agent is None:
+            logger.error("[Interaction] No agent selected, returning False")
             return False
+        
+        logger.info(f"[Interaction] Selected agent: {agent.agent_name}")
+        
+        # Check if we need to push previous agent memory
         if self.current_agent != agent and self.last_answer is not None:
+            logger.debug("[Interaction] Different agent selected, will push last agent memory")
             push_last_agent_memory = True
+        
         tmp = self.last_answer
         self.current_agent = agent
         self.is_generating = True
+        
+        logger.info(f"[Interaction] Starting agent processing...")
         self.last_answer, self.last_reasoning = await agent.process(self.last_query, self.speech)
         self.is_generating = False
+        
+        logger.info(f"[Interaction] Agent processing completed. Answer length: {len(self.last_answer) if self.last_answer else 0}")
+        logger.debug(f"[Interaction] Agent reasoning: {self.last_reasoning[:200] if self.last_reasoning else 'None'}...")
+        
         if push_last_agent_memory:
+            logger.debug("[Interaction] Pushing memory to current agent")
             self.current_agent.memory.push('user', self.last_query)
             self.current_agent.memory.push('assistant', self.last_answer)
+        
         if self.last_answer == tmp:
+            logger.debug("[Interaction] Answer unchanged, setting to None")
             self.last_answer = None
+        
+        logger.info("[Interaction] Think process completed successfully")
         return True
     
     def get_updated_process_answer(self) -> str:

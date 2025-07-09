@@ -4,6 +4,7 @@ from abc import abstractmethod
 import os
 import random
 import time
+import logging
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,9 @@ from sources.utility import pretty_print
 from sources.schemas import executorResult
 
 random.seed(time.time())
+
+# Get logger for agents
+logger = logging.getLogger(__name__)
 
 class Agent():
     """
@@ -161,20 +165,32 @@ class Agent():
         """
         Asynchronously ask the LLM to process the prompt.
         """
+        logger.debug(f"[{self.agent_name}] Starting LLM request...")
         self.status_message = "Thinking..."
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self.executor, self.sync_llm_request)
+        result = await loop.run_in_executor(self.executor, self.sync_llm_request)
+        logger.debug(f"[{self.agent_name}] LLM request completed")
+        return result
     
     def sync_llm_request(self) -> Tuple[str, str]:
         """
         Ask the LLM to process the prompt and return the answer and the reasoning.
         """
+        logger.debug(f"[{self.agent_name}] Getting memory for LLM request...")
         memory = self.memory.get()
+        logger.debug(f"[{self.agent_name}] Memory length: {len(memory) if memory else 0}")
+        
+        logger.info(f"[{self.agent_name}] Making LLM provider request...")
         thought = self.llm.respond(memory, self.verbose)
+        logger.info(f"[{self.agent_name}] LLM response received, length: {len(thought) if thought else 0}")
 
         reasoning = self.extract_reasoning_text(thought)
         answer = self.remove_reasoning_text(thought)
+        logger.debug(f"[{self.agent_name}] Extracted reasoning length: {len(reasoning) if reasoning else 0}")
+        logger.debug(f"[{self.agent_name}] Extracted answer length: {len(answer) if answer else 0}")
+        
         self.memory.push('assistant', answer)
+        logger.debug(f"[{self.agent_name}] Pushed answer to memory")
         return answer, reasoning
     
     async def wait_message(self, speech_module):
@@ -256,6 +272,7 @@ class Agent():
         """
         Execute all the tools the agent has and return the result.
         """
+        logger.info(f"[{self.agent_name}] Starting to execute modules with answer: {answer[:100]}...")
         feedback = ""
         success = True
         blocks = None
@@ -264,22 +281,32 @@ class Agent():
 
         self.success = True
         for name, tool in self.tools.items():
+            logger.debug(f"[{self.agent_name}] Processing tool: {name}")
             feedback = ""
             blocks, save_path = tool.load_exec_block(answer)
 
             if blocks != None:
+                logger.info(f"[{self.agent_name}] Executing {len(blocks)} {name} blocks...")
                 pretty_print(f"Executing {len(blocks)} {name} blocks...", color="status")
-                for block in blocks:
+                for i, block in enumerate(blocks):
+                    logger.debug(f"[{self.agent_name}] Executing block {i+1}/{len(blocks)}: {block[:50]}...")
                     self.show_block(block)
                     output = tool.execute([block])
                     feedback = tool.interpreter_feedback(output) # tool interpreter feedback
                     success = not tool.execution_failure_check(output)
+                    logger.debug(f"[{self.agent_name}] Block {i+1} result - Success: {success}, Feedback: {feedback[:100]}...")
                     self.blocks_result.append(executorResult(block, feedback, success, name))
                     if not success:
+                        logger.warning(f"[{self.agent_name}] Execution failed for block {i+1}: {feedback}")
                         self.success = False
                         self.memory.push('user', feedback)
                         return False, feedback
                 self.memory.push('user', feedback)
                 if save_path != None:
+                    logger.debug(f"[{self.agent_name}] Saving blocks to: {save_path}")
                     tool.save_block(blocks, save_path)
+            else:
+                logger.debug(f"[{self.agent_name}] No blocks found for tool {name}")
+        
+        logger.info(f"[{self.agent_name}] Module execution completed successfully")
         return True, feedback

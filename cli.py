@@ -28,9 +28,13 @@ async def main():
                         server_address=config["MAIN"]["provider_server_address"],
                         is_local=config.getboolean('MAIN', 'is_local'))
 
+    # Get default search URL from config
+    default_search_url = config.get('BROWSER', 'default_search_url', fallback='https://www.google.com')
+    
     browser = Browser(
         create_driver(headless=config.getboolean('BROWSER', 'headless_browser'), stealth_mode=stealth_mode, lang=languages[0]),
-        anticaptcha_manual_install=stealth_mode
+        anticaptcha_manual_install=stealth_mode,
+        default_url=default_search_url
     )
 
     agents = [
