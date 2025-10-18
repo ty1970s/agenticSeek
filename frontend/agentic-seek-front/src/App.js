@@ -20,7 +20,24 @@ function App() {
   const [isOnline, setIsOnline] = useState(false);
   const [status, setStatus] = useState("Agents ready");
   const [expandedReasoning, setExpandedReasoning] = useState(new Set());
+  const [selectedLanguage, setSelectedLanguage] = useState("auto"); // 新增语言设置
   const messagesEndRef = useRef(null);
+
+  // 语言选项配置
+  const languageOptions = [
+    { value: "auto", label: "自动检测", flag: "🌐" },
+    { value: "zh-CN", label: "简体中文", flag: "🇨🇳" },
+    { value: "zh-TW", label: "繁體中文", flag: "🇹🇼" },
+    { value: "en", label: "English", flag: "🇺🇸" },
+    { value: "ja", label: "日本語", flag: "🇯🇵" },
+    { value: "ko", label: "한국어", flag: "🇰🇷" },
+    { value: "fr", label: "Français", flag: "🇫🇷" },
+    { value: "de", label: "Deutsch", flag: "🇩🇪" },
+    { value: "es", label: "Español", flag: "🇪🇸" },
+    { value: "pt", label: "Português", flag: "🇵🇹" },
+    { value: "ru", label: "Русский", flag: "🇷🇺" },
+    { value: "ar", label: "العربية", flag: "🇸🇦" },
+  ];
 
   const fetchLatestAnswer = useCallback(async () => {
     try {
@@ -169,11 +186,12 @@ function App() {
     setError(null);
 
     try {
-      console.log("Sending query:", query);
+      console.log("Sending query:", query, "Language:", selectedLanguage);
       setQuery("waiting for response...");
       const res = await axios.post(`${BACKEND_URL}/query`, {
         query,
         tts_enabled: false,
+        response_language: selectedLanguage, // 添加语言参数
       });
       setQuery("Enter your query...");
       console.log("Response:", res.data);
@@ -220,6 +238,25 @@ function App() {
             <span className="status-text">
               {isOnline ? "Online" : "Offline"}
             </span>
+          </div>
+        </div>
+        <div className="header-controls">
+          <div className="language-selector">
+            <label htmlFor="language-select" className="language-label">
+              🌍 回复语言:
+            </label>
+            <select
+              id="language-select"
+              value={selectedLanguage}
+              onChange={(e) => setSelectedLanguage(e.target.value)}
+              className="language-select"
+            >
+              {languageOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.flag} {option.label}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
         <div className="header-actions">

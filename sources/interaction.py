@@ -27,6 +27,7 @@ class Interaction:
         self.last_query = None
         self.last_answer = None
         self.last_reasoning = None
+        self.last_success = True
         self.agents = agents
         self.tts_enabled = tts_enabled
         self.stt_enabled = stt_enabled
@@ -38,6 +39,7 @@ class Interaction:
         self.recorder = None
         self.is_generating = False
         self.languages = langs
+        self.response_language = "auto"  # 新增回复语言设置
         if tts_enabled:
             self.initialize_tts()
         if stt_enabled:
@@ -150,6 +152,33 @@ class Interaction:
         self.is_active = True
         self.last_query = query
     
+    def _add_language_instruction(self, query: str) -> str:
+        """根据设定的回复语言添加语言指令到查询中。"""
+        if self.response_language == "auto":
+            return query
+        
+        # 语言代码到指令的映射
+        language_instructions = {
+            "zh-CN": "请用简体中文回复。",
+            "zh-TW": "請用繁體中文回覆。",
+            "en": "Please reply in English.",
+            "ja": "日本語で回答してください。",
+            "ko": "한국어로 답변해 주세요.",
+            "fr": "Veuillez répondre en français.",
+            "de": "Bitte antworten Sie auf Deutsch.",
+            "es": "Por favor, responda en español.",
+            "pt": "Por favor, responda em português.",
+            "ru": "Пожалуйста, отвечайте на русском языке.",
+            "ar": "يرجى الرد باللغة العربية.",
+        }
+        
+        language_instruction = language_instructions.get(self.response_language, "")
+        if language_instruction:
+            logger.info(f"[Interaction] Adding language instruction: {language_instruction}")
+            return f"{query}\n\n{language_instruction}"
+        
+        return query
+    
     async def think(self) -> bool:
         """Request AI agents to process the user input."""
         logger.info(f"[Interaction] Starting think process for query: {self.last_query[:100] if self.last_query else 'None'}...")
@@ -176,8 +205,11 @@ class Interaction:
         self.current_agent = agent
         self.is_generating = True
         
+        # 根据设定的语言添加语言指令到查询中
+        query_with_language = self._add_language_instruction(self.last_query)
+        
         logger.info(f"[Interaction] Starting agent processing...")
-        self.last_answer, self.last_reasoning = await agent.process(self.last_query, self.speech)
+        self.last_answer, self.last_reasoning = await agent.process(query_with_language, self.speech)
         self.is_generating = False
         
         logger.info(f"[Interaction] Agent processing completed. Answer length: {len(self.last_answer) if self.last_answer else 0}")

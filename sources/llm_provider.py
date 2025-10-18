@@ -164,7 +164,11 @@ class Provider:
         """
         Use local or remote Ollama server to generate text.
         """
+        import signal
+        import time
+        
         thought = ""
+        timeout_seconds = 300  # 5 minutes timeout for complex reasoning tasks
         
         # Check for custom OLLAMA_BASE_URL from environment
         custom_base_url = os.getenv("OLLAMA_BASE_URL")
@@ -173,32 +177,62 @@ class Provider:
         else:
             host = f"{self.internal_url}:11434" if self.is_local else f"http://{self.server_address}"
         
-        client = OllamaClient(host=host)
+        # Configure client with timeout
+        import httpx
+        timeout_config = httpx.Timeout(timeout_seconds, connect=30.0)
+        client = OllamaClient(host=host, timeout=timeout_config)
 
+        def timeout_handler(signum, frame):
+            raise TimeoutError(f"Ollama request timed out after {timeout_seconds} seconds")
+        
+        # Set up timeout signal (only on Unix systems)
+        old_handler = None
+        if hasattr(signal, 'SIGALRM'):
+            old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(timeout_seconds)
+        
         try:
+            start_time = time.time()
+            
             stream = client.chat(
                 model=self.model,
                 messages=history,
                 stream=True,
             )
+            
             for chunk in stream:
+                # Check for timeout manually if signal not available
+                if not hasattr(signal, 'SIGALRM') and time.time() - start_time > timeout_seconds:
+                    raise TimeoutError(f"Ollama request timed out after {timeout_seconds} seconds")
+                    
                 if verbose:
                     print(chunk["message"]["content"], end="", flush=True)
                 thought += chunk["message"]["content"]
+                
+        except TimeoutError as e:
+            self.logger.error(f"Ollama request timed out: {e}")
+            raise Exception(f"Request timed out after {timeout_seconds} seconds. The model might be processing a complex task.")
         except httpx.ConnectError as e:
             raise Exception(
                 f"\nOllama connection failed at {host}. Check if the server is running."
             ) from e
+        except httpx.TimeoutException as e:
+            raise Exception(f"Ollama request timed out: {e}") from e
         except Exception as e:
             if hasattr(e, 'status_code') and e.status_code == 404:
                 animate_thinking(f"Downloading {self.model}...")
                 client.pull(self.model)
-                self.ollama_fn(history, verbose)
+                return self.ollama_fn(history, verbose)
             if "refused" in str(e).lower():
                 raise Exception(
                     f"Ollama connection refused at {host}. Is the server running?"
                 ) from e
             raise e
+        finally:
+            # Clean up signal handler
+            if hasattr(signal, 'SIGALRM') and old_handler is not None:
+                signal.alarm(0)  # Cancel the alarm
+                signal.signal(signal.SIGALRM, old_handler)
 
         return thought
 

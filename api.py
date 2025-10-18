@@ -261,7 +261,7 @@ async def think_wrapper(interaction, query):
 @api.post("/query", response_model=QueryResponse)
 async def process_query(request: QueryRequest):
     global is_generating, query_resp_history
-    logger.info(f"Processing query: {request.query}")
+    logger.info(f"Processing query: {request.query}, Language: {request.response_language}")
     query_resp = QueryResponse(
         done="false",
         answer="",
@@ -278,6 +278,8 @@ async def process_query(request: QueryRequest):
 
     try:
         is_generating = True
+        # 设置回复语言到交互系统
+        interaction.response_language = request.response_language
         success = await think_wrapper(interaction, request.query)
         is_generating = False
 

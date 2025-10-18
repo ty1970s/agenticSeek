@@ -64,9 +64,26 @@ class CoderAgent(Agent):
             await self.wait_message(speech_module)
             
             logger.debug(f"[CodeAgent] Making LLM request...")
-            answer, reasoning = await self.llm_request()
-            self.last_reasoning = reasoning
-            logger.info(f"[CodeAgent] LLM response received. Answer length: {len(answer) if answer else 0}")
+            
+            try:
+                # Add timeout protection for LLM request
+                answer, reasoning = await asyncio.wait_for(
+                    self.llm_request(), 
+                    timeout=300.0  # 5 minutes timeout
+                )
+                self.last_reasoning = reasoning
+                logger.info(f"[CodeAgent] LLM response received. Answer length: {len(answer) if answer else 0}")
+                
+            except asyncio.TimeoutError:
+                logger.error(f"[CodeAgent] LLM request timed out after 5 minutes")
+                error_message = ("I apologize, but the request timed out after 5 minutes. "
+                               "This might be due to the complexity of the task or model processing time. "
+                               "Please try breaking down your request into smaller parts or try again later.")
+                return error_message, ""
+            except Exception as e:
+                logger.error(f"[CodeAgent] LLM request failed: {str(e)}")
+                error_message = f"An error occurred while processing your request: {str(e)}"
+                return error_message, ""
             
             if clarify_trigger in answer:
                 logger.info(f"[CodeAgent] Clarification requested, returning early")

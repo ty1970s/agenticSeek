@@ -606,3 +606,27 @@ We’re looking for developers to improve AgenticSeek! Check out open issues or 
 5$ or more Monthly sponsor appear here:
 - **tatra-labs**
 
+## 日志查看工具
+
+AgenticSeek 提供了两个强大的日志查看工具来帮助您监控和调试系统：
+
+### 快速使用
+
+```bash
+# 查看所有日志文件
+./show_logs.sh
+
+# 列出可用的日志文件
+./show_logs.sh -l
+
+# 实时跟踪后端日志
+./show_logs.sh -f backend
+
+# 使用Python版本（支持更多功能）
+./show_logs.py --list
+./show_logs.py --search "error"
+./show_logs.py --level ERROR backend
+```
+
+详细使用说明请参考：[日志查看工具指南](docs/log_viewer_guide.md)
+
